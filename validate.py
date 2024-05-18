@@ -29,7 +29,7 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-model_idx = 45
+model_idx = 50
 initial_seed = 10000
 invest_rate = 0.3
 
@@ -67,6 +67,7 @@ def predict():
     last_candle: Candle = candles[-1]
     last_time = last_candle.kst_dt
     predict_times = [last_time + timedelta(minutes=unit * (i + 1)) for i in range(horizon)]
+    log.debug(f'candles count={len(candles)}, last_time={last_time}, predict_times={predict_times}')
 
     # X = np.array([[c.open_price, c.low_price, c.high_price, c.candle_acc_trade_volume] for c in candles])
     X = np.array([[c.close_price] for c in candles])
@@ -144,7 +145,7 @@ def candles_to_df(candles):
         'Volume': [c.candle_acc_trade_volume for c in candles]
     }
     df = pd.DataFrame(data)
-    df['date'] = pd.to_datetime(df['date'], unit='s', utc=True)
+    df['date'] = pd.to_datetime(df['date'], utc=True)
     df['date'] = df['date'].dt.tz_convert('Asia/Seoul')
     df.set_index('date', inplace=True)
     return df
@@ -205,9 +206,8 @@ def update(frame):
         for i, y in enumerate(predicted_prices):
             t = predict_times[i]
             timecode = get_time_code(t.timestamp(), unit)
-            next_candle = market.get_candle(timecode, unit=unit)
-            candle = market.get_candle(timecode, unit=unit)
-            prev_candle = market.get_candle(timecode-1, unit=unit)
+            candle = market.get_candle(unit, timecode)
+            prev_candle = market.get_candle(unit, timecode-1)
             y_offset = [0.0001, -0.0001][i % 2]
             
             if candle is not None:

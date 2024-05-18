@@ -10,7 +10,7 @@ import logger as log
 
 available_candle_units = [1, 3, 5, 10, 15, 30, 60, 240]
 
-conn = sqlite3.connect('datafiles/db.sqlite3')
+conn = sqlite3.connect('datafiles/db.sqlite3', check_same_thread=False)
 c = conn.cursor()
 
 kst = pytz.timezone('Asia/Seoul')
@@ -21,13 +21,16 @@ class Candle:
         self.utc_dt = None
         self.kst_dt = None
         
-        if utc_dt is not None:
-            self.utc_dt = datetime.fromisoformat(utc_dt.replace('Z', '+00:00'))
         if kst_dt is not None:
             if type(kst_dt) == str:
                 self.kst_dt = datetime.fromisoformat(kst_dt.replace('+09:00', ''))
             elif type(kst_dt) == datetime:
                 self.kst_dt = kst_dt
+        if utc_dt is not None:
+            self.utc_dt = datetime.fromisoformat(utc_dt.replace('Z', '+00:00'))
+        elif kst_dt is not None:
+            self.utc_dt = self.kst_dt.astimezone(pytz.utc)
+
         
         self.open_price = open_price
         self.close_price = close_price
@@ -236,6 +239,24 @@ class Market:
             self.candles_group[unit][cc[0]] = candle
         
         log.info(f'Loaded {len(candles)} candles from db')
+    
+    def get_candle(self, unit, timecode) -> Candle:
+        candle_group = self.candles_group.get(unit)
+        if candle_group is None:
+            # search on db
+            missings = self.find_missing_intervals_on_db(unit, timecode, timecode)
+            if len(missings) > 0:
+                # fetch missings (from api)
+                start, end = missings[0]
+                self.get_candles_from_api(unit, end=end, count=1)
+            else:
+                self.load_candles_from_db(unit, timecode, timecode)
+            
+            candle_group = self.candles_group.get(unit)
+            if candle_group is None:
+                raise Exception(f'failed to load candles even after safe-load for {self.market_name}')
+        
+        return candle_group.get(timecode)
         
     
     # 최근 캔들 리스트 반환 (현재 시간 캔들 제외)
@@ -307,11 +328,17 @@ class Market:
                 log.warn(f'missing candles detected even after safe-load for {self.market_name}: {result_string}, but passing by allowance.')
         
         # validated
+        none_candles = 0
         result = []
-        for timecode in range(t_start, t_end):
+        for timecode in range(t_start, t_end + 1):
             candle = candle_group.get(timecode)
             if candle is not None:
                 result.append(candle)
+            else:
+                none_candles += 1
+        
+        if none_candles > 0:
+            log.warn(f'{none_candles} candles are missing for {self.market_name}')
         
         return result
         

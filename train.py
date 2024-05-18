@@ -20,13 +20,13 @@ import logger as log
 os.environ["PATH"]+=os.pathsep+'C:/Program Files/Graphviz/bin/'
 
 coin = 'XRP'
-model_idx = 47
-unit = 15
-window_size = 500
-horizon = 10
-candle_cnt = 10000
-batch_size = 256
-epochs = 500
+model_idx = 50
+unit = 1
+window_size = 300
+horizon = 5
+candle_cnt = 100000
+batch_size = 512
+epochs = 400
 learning_rate = 0.006
 random_state = 30
 
@@ -95,13 +95,13 @@ try:
     y_test = scaler_y.inverse_transform(y_test.reshape(-1, horizon))
 
     mse = mean_squared_error(y_test, y_pred)
-    log.debug(f'Mean Squared Error: {mse}')
+    log.info(f'Mean Squared Error: {mse}')
 
     evaluate_value = model.evaluate(X_test, y_test, verbose=0)
-    log.debug("MAE:", evaluate_value[1])
-    log.debug("MAPE:", sum(abs(y_test-y_pred)/y_test)/len(X_test))
+    log.info("MAE:", evaluate_value[1])
+    log.info("MAPE:", sum(abs(y_test-y_pred)/y_test)/len(X_test))
     r2 = r2_score(y_test, y_pred)
-    log.debug(f'R-squared: {r2}')
+    log.info(f'R-squared: {r2}')
     
     # make directory
     if not os.path.exists(f'models'):
