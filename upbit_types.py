@@ -223,6 +223,35 @@ class Market:
 
         return missings
     
+    def get_recent_candle_before_from_db(self, unit, timecode) -> Candle:
+        c.execute('''
+            SELECT time_code, low_price, high_price, open_price, close_price, volume
+            FROM candles
+            WHERE quote=? AND base=? AND unit=? AND time_code<?
+            ORDER BY time_code DESC LIMIT 1
+        ''', (self.quote_currency, self.base_currency, unit, timecode))
+        cc = c.fetchone()
+        if cc is None:
+            return None
+        
+        kst_dt = datetime.fromtimestamp(get_timestamp_from_code(cc[0], unit)).strftime('%Y-%m-%d %H:%M:%S')
+        candle = Candle(unit, None, kst_dt, cc[3], cc[4], cc[1], cc[2], None, None, cc[5])
+        return candle
+    
+    def get_candle_from_db(self, unit, timecode) -> Candle:
+        c.execute('''
+            SELECT time_code, low_price, high_price, open_price, close_price, volume
+            FROM candles
+            WHERE quote=? AND base=? AND unit=? AND time_code=?
+        ''', (self.quote_currency, self.base_currency, unit, timecode))
+        cc = c.fetchone()
+        if cc is None:
+            return None
+        
+        kst_dt = datetime.fromtimestamp(get_timestamp_from_code(cc[0], unit)).strftime('%Y-%m-%d %H:%M:%S')
+        candle = Candle(unit, None, kst_dt, cc[3], cc[4], cc[1], cc[2], None, None, cc[5])
+        return candle
+    
     def load_candles_from_db(self, unit, start=None, end=None):
         if self.candles_group.get(unit) is None:
             self.candles_group[unit] = {}
@@ -257,14 +286,12 @@ class Market:
                 raise Exception(f'failed to load candles even after safe-load for {self.market_name}')
         
         return candle_group.get(timecode)
-        
     
-    # 최근 캔들 리스트 반환 (현재 시간 캔들 제외)
-    def get_recent_candles(self, unit, count=None, include_now=False, allow_upbit_omission=False, silent=False) -> List[Candle]:
+    def get_candles_before(self, unit, timecode, count=None, include_now=False, allow_upbit_omission=False, silent=False, padding=False) -> List[Candle]:
         current_timecode = get_time_code(datetime.now().timestamp(), unit)
-        t_end = current_timecode
-        if not include_now:
-            t_end -= 1            
+        t_end = timecode
+        if not include_now and current_timecode == timecode:
+            t_end -= 1
         t_start = t_end - count + 1
         log.verbose(f'Searching for {unit}m candles ({t_start} ~ {t_end})...')
         
@@ -329,18 +356,38 @@ class Market:
         
         # validated
         none_candles = 0
+        padded_candles = 0
         result = []
         for timecode in range(t_start, t_end + 1):
             candle = candle_group.get(timecode)
             if candle is not None:
+                if current_timecode == timecode:
+                    self.get_candles_from_api(unit, end=timecode, count=1, silent=silent)
+                    candle = candle_group.get(timecode)
                 result.append(candle)
             else:
-                none_candles += 1
+                # try padding from previous timecode
+                prev = None
+                if padding:
+                    prev = self.get_recent_candle_before_from_db(unit, timecode)
+                
+                if prev is not None:
+                    padded_candle = Candle(unit, None, get_timestring_from_code(timecode, unit), prev.open_price, prev.close_price, prev.low_price, prev.high_price, None, None, 0)
+                    result.append(padded_candle)
+                    padded_candles += 1
+                else:
+                    none_candles += 1
         
+        if padded_candles > 0:
+            log.warn(f'{padded_candles} candles are padded for {self.market_name}')
         if none_candles > 0:
             log.warn(f'{none_candles} candles are missing for {self.market_name}')
         
         return result
+    
+    # 최근 캔들 리스트 반환 (현재 시간 캔들 제외)
+    def get_recent_candles(self, unit, count=None, include_now=False, allow_upbit_omission=False, silent=False, padding=False) -> List[Candle]:
+        return self.get_candles_before(unit, get_time_code(datetime.now().timestamp(), unit), count, include_now, allow_upbit_omission, silent, padding)
         
     # API에서 캔들 리스트 반환 (count 무제한)
     def get_candles_from_api(self, unit, end=None, count=100, silent=False) -> List[Candle]:

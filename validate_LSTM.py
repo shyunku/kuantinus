@@ -29,7 +29,7 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-model_idx = 50
+model_idx = 53
 initial_seed = 10000
 invest_rate = 0.3
 
@@ -63,7 +63,9 @@ predictions = {}
 correctness = 0
 
 def predict():
-    candles = market.get_recent_candles(unit, count=window_size)
+    left_pad = 0 # N * unit 분 앞으로 당기기
+    candles = market.get_recent_candles(unit, count=window_size + left_pad, allow_upbit_omission=True, padding=True)
+    # candles = candles[:-left_pad]
     last_candle: Candle = candles[-1]
     last_time = last_candle.kst_dt
     predict_times = [last_time + timedelta(minutes=unit * (i + 1)) for i in range(horizon)]
@@ -79,12 +81,15 @@ def predict():
         return np.array(X_seq)
 
     input = create_sequences(X, window_size)
+    log.debug("input", input)
     input_scaled = scaler_X.transform(input.reshape(-1, input.shape[2]))
     input = input_scaled.reshape(input.shape)
 
     predicted_price = model.predict(input)
-    # predicted_price = scaler_y.inverse_transform(predicted_price)
     predicted_price = scaler_y.inverse_transform(predicted_price.reshape(-1, horizon))
+    predicted_price = predicted_price.reshape(-1, horizon)
+    
+    # print(input, predicted_price)
 
     # set predictions
     for i, t in enumerate(predict_times):
@@ -102,7 +107,7 @@ def get_predictions():
 predict()
 
 # realtime data
-max_candles = 50
+max_candles = 100
 candles = market.get_recent_candles(unit, max_candles)
 
 def update_predictions():
@@ -133,7 +138,7 @@ def update_candles():
         time.sleep(0.5)
         
         with lock:
-            candles = market.get_recent_candles(unit, max_candles, include_now=True)
+            candles = market.get_recent_candles(unit, max_candles, include_now=True, allow_upbit_omission=True)
 
 def candles_to_df(candles):
     data = {
