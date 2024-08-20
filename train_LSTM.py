@@ -19,20 +19,24 @@ import logger as log
 
 os.environ["PATH"]+=os.pathsep+'C:/Program Files/Graphviz/bin/'
 
-coin = 'XRP'
-model_idx = 60
-unit = 1
-window_size = 50
-horizon = 30
-candle_cnt = 10000
+coin = 'BTC'
+model_idx = 86
+unit = 240
+# input size
+window_size = 100
+# output size
+horizon = 1
+candle_cnt = 20000
 batch_size = 512
-epochs = 500
-learning_rate = 0.008
+epochs = 300
+learning_rate = 0.00001
 random_state = 30
-input_columns = ['close_price']
+input_columns = ['open_price', 'close_price', 'low_price', 'high_price', 'candle_acc_trade_volume']
+scaler_method = 'minmax'
 
-x_scaler_method = None
-y_scaler_method = None
+x_scaler_method = scaler_method
+y_scaler_method = scaler_method
+fluctuation = True
 
 # model directory
 model_name = f'model_{model_idx}'
@@ -46,15 +50,40 @@ try:
     markets = Markets()
     markets.load_markets()
 
-    xrp_market: Market = markets.get(coin)
-    log.info("Loaded", xrp_market)
+    market: Market = markets.get(coin)
+    log.info("Loaded", market)
+    
+    log.info("====================== Model information ======================")
+    log.info("Model name: ", model_name)
+    log.info("Coin: ", coin)
+    log.info("Unit: ", unit)
+    log.info("Window size: ", window_size)
+    log.info("Horizon: ", horizon)
+    log.info("Candle count: ", candle_cnt)
+    log.info("Batch size: ", batch_size)
+    log.info("Epochs: ", epochs)
+    log.info("Learning rate: ", learning_rate)
+    log.info("Random state: ", random_state)
+    log.info("X scaler method: ", x_scaler_method)
+    log.info("Y scaler method: ", y_scaler_method)
+    log.info("Input columns: ", input_columns)
+    log.info("Fluctuation: ", fluctuation)
+    log.info("===============================================================")
+    
     # candles = xrp_market.get_recent_candles(unit, count=candle_cnt, allow_upbit_omission=True)
-    candles = xrp_market.get_candles_before(unit, stdtime_code, count=candle_cnt, allow_upbit_omission=True)
+    candles = market.get_candles_before(unit, stdtime_code, count=candle_cnt, allow_upbit_omission=True)
 
-    # 데이터 추출 및 배열 생성
-    # X = np.array([[c.open_price, c.low_price, c.high_price, c.candle_acc_trade_volume, c.close_price] for c in candles])
-    X = np.array([[getattr(c, col) for col in input_columns] for c in candles])
-    y = np.array([c.close_price for c in candles])
+    # create input data
+    if fluctuation:
+        # extract difference
+        fluctuationRates = []
+        for i in range(1, len(candles)):
+            fluctuationRates.append((candles[i].close_price - candles[i-1].close_price)/candles[i-1].close_price)
+        X = np.array([[f] for f in fluctuationRates])
+        y = np.array([f for f in fluctuationRates])
+    else:
+        X = np.array([[getattr(c, col) for col in input_columns] for c in candles])
+        y = np.array([c.close_price for c in candles])
 
     def create_sequences(X, y, window_size, horizon):
         X_seq, y_seq = [], []
@@ -66,14 +95,13 @@ try:
     X_seq, y_seq = create_sequences(X, y, window_size, horizon)
     log.debug(f'x_shape={X_seq.shape}, y_shape={y_seq.shape}')
 
-    # 데이터 스케일링
+    # scale data
     if x_scaler_method == 'minmax':
         scaler_X = MinMaxScaler()
         X_scaled = scaler_X.fit_transform(X_seq.reshape(-1, X_seq.shape[2]))
         X_scaled = X_scaled.reshape(X_seq.shape)
     else:
         X_scaled = X_seq
-
     if y_scaler_method == 'minmax':
         scaler_y = MinMaxScaler()
         y_scaled = scaler_y.fit_transform(y_seq.reshape(-1, horizon))
@@ -86,10 +114,10 @@ try:
 
     # LSTM 모델 구축
     model = Sequential([
-        LSTM(256, return_sequences=True, activation='tanh', input_shape=(window_size, X_train.shape[2])),
-        # Dropout(0.01),
-        LSTM(128, return_sequences=False),
-        # Dropout(0.01),
+        LSTM(64, return_sequences=True, activation='tanh', input_shape=(window_size, X_train.shape[2])),
+        Dropout(0.01),
+        LSTM(32, return_sequences=False),
+        Dropout(0.01),
         Dense(horizon)
     ])
 
@@ -116,6 +144,9 @@ try:
     log.info(f'Mean Squared Error: {mse}')
 
     evaluate_value = model.evaluate(X_test, y_test, verbose=0)
+    log.debug("evaluate value", evaluate_value)
+    log.debug("X_test length", len(X_test))
+    
     log.info("MAE:", evaluate_value[1])
     log.info("MAPE:", sum(abs(y_test-y_pred)/y_test)/len(X_test))
     r2 = r2_score(y_test, y_pred)
@@ -152,7 +183,8 @@ try:
         'r2': r2,
         'x_scaler_method': x_scaler_method,
         'y_scaler_method': y_scaler_method,
-        'input_columns': input_columns
+        'input_columns': input_columns,
+        'fluctuation': fluctuation
     }
     # save properties to file
     with open(f'models/{model_name}/props.json', 'w') as f:

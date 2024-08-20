@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 
-model_idx = 60
+model_idx = 78
 
 # 초기값 설정 부분
 model_name = f'model_{model_idx}'
@@ -17,6 +17,8 @@ with open(f'models/{model_name}/props.json', 'r') as f:
     coin = props['coin']
     unit = props['unit']
     window_size = props['window_size']
+    fluctuation = props['fluctuation']
+    input_columns = props['input_columns']
 
 try:
     # 마켓 초기화 및 캔들 데이터 가져오기
@@ -29,10 +31,16 @@ try:
     # 모델 로드
     model = load_model(f'models/{model_name}')
     # model.compile(run_eagerly=True)  # run_eagerly 옵션 추가
-
-    # 데이터 준비
-    X_sample = np.array([[c.close_price] for c in candles[:window_size]])
-    X_sample = X_sample.reshape((1, X_sample.shape[0], 1))  # 3D 텐서로 변환
+    
+    if fluctuation:
+        fluctuationRates = []
+        for i in range(1, len(candles)):
+            fluctuationRates.append(candles[i].close_price - candles[i-1].close_price)
+        X_sample = np.array([[f] for f in fluctuationRates[:window_size]])
+        X_sample = X_sample.reshape((1, X_sample.shape[0], 1))  # 3D 텐서로 변환
+    else:
+        X_sample = np.array([[getattr(c, col) for col in input_columns] for c in candles[:window_size]])
+        X_sample = X_sample.reshape((1, X_sample.shape[0], len(input_columns)))
     
     # 각 시퀀스 인덱스의 중요도 계산
     importances = np.zeros(window_size)

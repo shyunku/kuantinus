@@ -29,9 +29,10 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-model_idx = 53
+model_idx = 64
 initial_seed = 10000
 invest_rate = 0.3
+update_interval = 1
 
 seed = initial_seed
 seed_last_calculate_timecode = 0
@@ -45,6 +46,8 @@ with open(f'models/{model_name}/props.json', 'r') as f:
     unit = props['unit']
     window_size = props['window_size']
     horizon = props['horizon']
+    x_scaler_method = props['x_scaler_method']
+    y_scaler_method = props['y_scaler_method']
 
 # model directory
 model_name = f'model_{model_idx}'
@@ -55,24 +58,31 @@ markets.load_markets()
 market: Market = markets.get(coin)
 
 # load scaler & models
-scaler_X = load(f'models/{model_name}/scaler_x.gz')
-scaler_y = load(f'models/{model_name}/scaler_y.gz')
+scaler_X = load(f'models/{model_name}/scaler_x.gz') if x_scaler_method is not None else None
+scaler_y = load(f'models/{model_name}/scaler_y.gz') if y_scaler_method is not None else None
 model = load_model(f'models/{model_name}')
 
 predictions = {}
+last_candle = None
 correctness = 0
 
 def predict():
+    global last_candle
     left_pad = 0 # N * unit 분 앞으로 당기기
-    candles = market.get_recent_candles(unit, count=window_size + left_pad, allow_upbit_omission=True, padding=True)
+    candles = market.get_recent_candles(unit, count=window_size + left_pad + 1, allow_upbit_omission=True, padding=True)
     # candles = candles[:-left_pad]
-    last_candle: Candle = candles[-1]
+    last_candle = candles[-1]
     last_time = last_candle.kst_dt
     predict_times = [last_time + timedelta(minutes=unit * (i + 1)) for i in range(horizon)]
     log.debug(f'candles count={len(candles)}, last_time={last_time}, predict_times={predict_times}')
+    
+    # extract difference
+    fluctuationRates = []
+    for i in range(1, len(candles)):
+        fluctuationRates.append(candles[i].close_price - candles[i-1].close_price)
 
-    # X = np.array([[c.open_price, c.low_price, c.high_price, c.candle_acc_trade_volume] for c in candles])
-    X = np.array([[c.close_price] for c in candles])
+    # X = np.array([[c.close_price] for c in candles])
+    X = np.array([[f] for f in fluctuationRates])
 
     def create_sequences(X, window_size):
         X_seq = []
@@ -82,12 +92,14 @@ def predict():
 
     input = create_sequences(X, window_size)
     log.debug("input", input)
-    input_scaled = scaler_X.transform(input.reshape(-1, input.shape[2]))
-    input = input_scaled.reshape(input.shape)
+    if x_scaler_method is not None:
+        input_scaled = scaler_X.transform(input.reshape(-1, input.shape[2]))
+        input = input_scaled.reshape(input.shape)
 
     predicted_price = model.predict(input)
-    predicted_price = scaler_y.inverse_transform(predicted_price.reshape(-1, horizon))
-    predicted_price = predicted_price.reshape(-1, horizon)
+    if y_scaler_method is not None:
+        predicted_price = scaler_y.inverse_transform(predicted_price.reshape(-1, horizon))
+        predicted_price = predicted_price.reshape(-1, horizon)
     
     # print(input, predicted_price)
 
@@ -97,10 +109,15 @@ def predict():
         predictions[timecode] = predicted_price[0][i]
 
 def get_predictions():
-    global predictions
+    global predictions, last_candle
     # flatten
     predict_times = [datetime.fromtimestamp(get_timestamp_from_code(k, unit)) for k in predictions.keys()]
-    predict_prices = list(predictions.values())
+    predict_prices = []
+    cur = last_candle.close_price
+    for p in predictions.values():
+        cur += p
+        predict_prices.append(cur)
+    print(predictions.values())
     return predict_times, predict_prices
 
 # initial predict
@@ -117,7 +134,7 @@ def update_predictions():
         if not plt.fignum_exists(fig.number):
             break
         
-        time.sleep(0.5)
+        time.sleep(update_interval)
         
         current_timecode = get_time_code(datetime.now().timestamp(), unit)
         current_timecode_time = get_timestamp_from_code(current_timecode, unit)
@@ -135,7 +152,7 @@ def update_candles():
         if not plt.fignum_exists(fig.number):
             break
         
-        time.sleep(0.5)
+        time.sleep(update_interval)
         
         with lock:
             candles = market.get_recent_candles(unit, max_candles, include_now=True, allow_upbit_omission=True)
@@ -250,5 +267,5 @@ predict_thread.daemon = True
 predict_thread.start()
 
 # 애니메이션 실행
-ani = FuncAnimation(fig, update, blit=False, interval=500, save_count=50)
+ani = FuncAnimation(fig, update, blit=False, interval=update_interval*1000, save_count=50)
 plt.show()
